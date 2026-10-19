@@ -387,19 +387,23 @@ def check_implementation(base, a=0.7, T=10, n=4000):
     ref_lp = torch.distributions.Normal(mu, math.sqrt(var)).log_prob(x).sum(-1)
     assert torch.allclose(gauss_logp(x, mu, var), ref_lp, atol=1e-5)
 
-    # (d) KL: zero at theta == ref; closed form (§3.4) == torch kl_divergence for a perturbed policy
-    pert = copy.deepcopy(base)
+    # (d) KL: zero at theta == ref; closed form (§3.4) == torch kl_divergence for a perturbed policy.
+    # float64: mu_p - mu_r is a small difference of O(1) numbers, so float32 cancellation
+    # alone gives ~1e-2 relative error on samples where the KL is tiny.
+    ref64 = copy.deepcopy(base).double()
+    pert = copy.deepcopy(ref64)
     with torch.no_grad():
         for p in pert.parameters():
             p.add_(0.01 * torch.randn_like(p))
+    xs64 = xs.double()
     worst = 0.0
     for k in range(T):
         t, h, g2 = step_consts(ts, k, a)
         g = math.sqrt(g2)
-        mu_r, v_r = sde_mean(base, xs[k], t, h, g2)
-        mu_0, _ = sde_mean(copy.deepcopy(base), xs[k], t, h, g2)
+        mu_r, v_r = sde_mean(ref64, xs64[k], t, h, g2)
+        mu_0, _ = sde_mean(copy.deepcopy(ref64), xs64[k], t, h, g2)
         assert ((mu_0 - mu_r) ** 2).sum(-1).max().item() == 0.0
-        mu_p, v_p = sde_mean(pert, xs[k], t, h, g2)
+        mu_p, v_p = sde_mean(pert, xs64[k], t, h, g2)
         kl_mean = ((mu_p - mu_r) ** 2).sum(-1) / (2 * g2 * h)
         kl_v = (h / 2) * (1 / g + g * (1 - t) / (2 * t)) ** 2 * ((v_p - v_r) ** 2).sum(-1)
         std = math.sqrt(g2 * h)
